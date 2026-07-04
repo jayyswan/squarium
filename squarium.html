@@ -1,0 +1,486 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Square Canvas</title>
+<style>
+  :root{
+    --bg:#131722; --grid:rgba(255,255,255,0.10); --panel:rgba(22,26,37,0.82);
+    --panel-line:rgba(255,255,255,0.10); --ink:#e7eaf0; --ink-dim:#8b93a7; --accent:#ffffff;
+    --font:ui-monospace,SFMono-Regular,Menlo,Consolas,"Roboto Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);font-family:var(--font);color:var(--ink);
+    -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;}
+  #viewport{position:fixed;inset:0;cursor:default;background-color:var(--bg);
+    background-image:radial-gradient(circle at center, var(--grid) 1px, transparent 1.6px);
+    background-size:var(--gpx) var(--gpx);background-position:var(--gx) var(--gy);}
+  #viewport.panning{cursor:grabbing}
+  #world{position:absolute;top:0;left:0;transform-origin:0 0;will-change:transform;}
+  .rect{position:absolute;border-radius:3px;cursor:grab;touch-action:none;transform-origin:50% 50%;
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,0.20), 0 6px 16px rgba(0,0,0,0.28);
+    background-image:linear-gradient(160deg, rgba(255,255,255,0.26), rgba(255,255,255,0) 55%);}
+  .rect:active{cursor:grabbing}
+  .rect.sel{box-shadow:inset 0 0 0 1px rgba(255,255,255,0.34), 0 8px 22px rgba(0,0,0,0.40);}
+
+  #overlay{position:fixed;inset:0;pointer-events:none;}
+  #ovsvg{position:absolute;inset:0;width:100%;height:100%;overflow:visible;}
+  #obb{fill:none;stroke:var(--accent);stroke-width:1.5;display:none;}
+  #rotline{stroke:var(--ink-dim);stroke-width:1.5;stroke-dasharray:3 3;display:none;}
+  .handle{position:absolute;width:12px;height:12px;margin:-6px 0 0 -6px;background:#fff;border-radius:3px;
+    box-shadow:0 0 0 1.5px #1b2333,0 1px 4px rgba(0,0,0,0.5);pointer-events:auto;display:none;}
+  #rot{position:absolute;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;background:#1b2333;
+    color:#fff;display:none;align-items:center;justify-content:center;pointer-events:auto;cursor:grab;
+    font-size:13px;border:1px solid rgba(255,255,255,0.25);box-shadow:0 2px 8px rgba(0,0,0,0.5);}
+  .ovbtn{position:absolute;display:none;align-items:center;justify-content:center;pointer-events:auto;
+    cursor:pointer;font-family:var(--font);font-size:12px;color:#fff;background:#1b2333;
+    border:1px solid rgba(255,255,255,0.18);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.45);
+    height:26px;padding:0 10px;white-space:nowrap;}
+  #del{width:24px;height:24px;padding:0;border-radius:50%;margin:-12px 0 0 -12px;}
+  #del:hover{background:#e5484d;border-color:#e5484d}
+  #merge:hover{background:#3b6ef5;border-color:#3b6ef5}
+  #split:hover{background:rgba(255,255,255,0.1)}
+
+  #bar{position:fixed;top:14px;left:14px;display:flex;gap:6px;align-items:center;padding:6px;border-radius:12px;
+    background:var(--panel);border:1px solid var(--panel-line);backdrop-filter:blur(10px);
+    -webkit-backdrop-filter:blur(10px);z-index:10;}
+  #bar button{font-family:var(--font);font-size:12.5px;color:var(--ink);background:transparent;
+    border:1px solid transparent;border-radius:8px;padding:7px 11px;cursor:pointer;white-space:nowrap;}
+  #bar button:hover{background:rgba(255,255,255,0.07)}
+  #bar button:active{background:rgba(255,255,255,0.12)}
+  #bar .primary{background:#3b6ef5;} #bar .primary:hover{background:#4d7bf7}
+  #bar .sep{width:1px;height:20px;background:var(--panel-line);margin:0 2px}
+  #bar .zoom{min-width:46px;text-align:center;color:var(--ink-dim);font-size:12px;padding:7px 4px}
+  #hint{position:fixed;bottom:14px;left:14px;z-index:10;color:var(--ink-dim);font-size:11.5px;line-height:1.7;
+    background:var(--panel);border:1px solid var(--panel-line);border-radius:10px;padding:9px 12px;
+    backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);max-width:280px;}
+  #hint b{color:var(--ink);font-weight:600}
+  #count{position:fixed;bottom:14px;right:14px;z-index:10;color:var(--ink-dim);font-size:11.5px;
+    background:var(--panel);border:1px solid var(--panel-line);border-radius:10px;padding:9px 12px;
+    backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);}
+  @media (max-width:560px){#hint{display:none}}
+</style>
+
+<div id="viewport"><div id="world"></div></div>
+
+<div id="overlay">
+  <svg id="ovsvg"><line id="rotline"/><polygon id="obb"/></svg>
+  <div class="handle" data-corner="nw"></div>
+  <div class="handle" data-corner="ne"></div>
+  <div class="handle" data-corner="sw"></div>
+  <div class="handle" data-corner="se"></div>
+  <div id="rot" title="Drag to rotate">↻</div>
+  <div id="del" class="ovbtn" title="Delete (or press Delete)">✕</div>
+  <div id="merge" class="ovbtn" title="Weld touching shapes into one">⛓ Merge</div>
+  <div id="split" class="ovbtn" title="Break back into separate squares">⤲ Split</div>
+</div>
+
+<div id="bar">
+  <button class="primary" id="addBtn">+ Square</button>
+  <button id="clearBtn">Clear</button>
+  <div class="sep"></div>
+  <button id="zoomOut">−</button>
+  <div class="zoom" id="zoomLbl">100%</div>
+  <button id="zoomIn">+</button>
+  <button id="resetBtn">Reset view</button>
+</div>
+
+<div id="hint">
+  <b>Double-click</b> empty space to drop a square · <b>drag</b> to move · drag a <b>corner</b> to resize ·
+  drag the <b>↻</b> handle to rotate · everything stops at collisions, and <b>Merge</b>/<b>Split</b> work at any angle.
+</div>
+<div id="count">0 shapes</div>
+
+<script>
+(() => {
+  "use strict";
+
+  // ---------- Constants ----------
+  const MIN_SIDE = 12, DEFAULT = 116;
+  const MINZ = 0.3, MAXZ = 4, GRID = 28;
+  const TOUCH_EPS = 1.3;          // gap (world units) at/under which shapes count as touching
+  const ROT_HANDLE_PX = 30;       // screen offset of the rotate handle above the box
+  const PALETTE = ["#5b8def","#1fc8a9","#f4a340","#e5689b","#9b6de2","#57c26b","#f0664d","#4db6d6"];
+
+  // ---------- State ----------
+  // Shape = rigid body: { id, angle, parts:[{verts:[{x,y}x4], color}], _els:[] }
+  // verts are world-space corners of each rectangular part (consistent winding).
+  let pan = {x:0,y:0}, zoom = 1;
+  let shapes = [];
+  let nextId = 1, colorTick = 0, selectedId = null;
+  let mode = "idle", start = null;
+
+  // ---------- DOM ----------
+  const viewport=document.getElementById("viewport"), world=document.getElementById("world");
+  const ovsvg=document.getElementById("ovsvg"), obbEl=document.getElementById("obb"), rotline=document.getElementById("rotline");
+  const handles=[...document.querySelectorAll(".handle")];
+  const rotHandle=document.getElementById("rot");
+  const delBtn=document.getElementById("del"), mergeBtn=document.getElementById("merge"), splitBtn=document.getElementById("split");
+  const zoomLbl=document.getElementById("zoomLbl"), countEl=document.getElementById("count");
+
+  // ---------- Vector helpers ----------
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  const byId=id=>shapes.find(s=>s.id===id)||null;
+  const sub=(a,b)=>({x:a.x-b.x,y:a.y-b.y});
+  const dot=(a,b)=>a.x*b.x+a.y*b.y;
+  const len=a=>Math.hypot(a.x,a.y);
+  function norm(a){const l=len(a)||1;return{x:a.x/l,y:a.y/l};}
+  function rotPt(p,ang,piv){const c=Math.cos(ang),s=Math.sin(ang),dx=p.x-piv.x,dy=p.y-piv.y;
+    return{x:piv.x+dx*c-dy*s, y:piv.y+dx*s+dy*c};}
+  function centroidVerts(vs){let x=0,y=0;for(const v of vs){x+=v.x;y+=v.y;}return{x:x/vs.length,y:y/vs.length};}
+  function shapeCentroid(sh){const all=[];sh.parts.forEach(p=>all.push(...p.verts));return centroidVerts(all);}
+
+  function squareVerts(x,y,s){return[{x,y},{x:x+s,y},{x:x+s,y:y+s},{x,y:y+s}];}
+
+  // ---------- SAT (oriented convex polygon collision) ----------
+  function axesOf(vs){const out=[];for(let i=0;i<vs.length;i++){const a=vs[i],b=vs[(i+1)%vs.length];
+    out.push(norm({x:-(b.y-a.y), y:(b.x-a.x)}));}return out;}
+  function project(vs,ax){let mn=Infinity,mx=-Infinity;for(const v of vs){const d=dot(v,ax);if(d<mn)mn=d;if(d>mx)mx=d;}return{mn,mx};}
+  // Returns {overlapping, depth, axis} (axis oriented from B toward A) or {overlapping:false,gap,axis}
+  function satInfo(A,B){
+    const axes=axesOf(A).concat(axesOf(B));
+    let maxGap=-Infinity, sepAxis=axes[0], minPen=Infinity, penAxis=axes[0];
+    for(const ax of axes){
+      const pa=project(A,ax), pb=project(B,ax);
+      const gap=Math.max(pa.mn-pb.mx, pb.mn-pa.mx);
+      if(gap>maxGap){maxGap=gap;sepAxis=ax;}
+      const pen=-gap;
+      if(pen<minPen){minPen=pen;penAxis=ax;}
+    }
+    if(maxGap>0) return {overlapping:false, gap:maxGap, axis:sepAxis};
+    // orient penAxis from B->A
+    const d=sub(centroidVerts(A),centroidVerts(B));
+    const axis = dot(penAxis,d)<0 ? {x:-penAxis.x,y:-penAxis.y} : penAxis;
+    return {overlapping:true, depth:minPen, axis};
+  }
+  // Closest distance between two convex polys (0 if overlapping) — used for "touching"
+  function pointSeg(p,a,b){const ab=sub(b,a),ap=sub(p,a);const t=clamp(dot(ap,ab)/(dot(ab,ab)||1),0,1);
+    return len(sub(p,{x:a.x+ab.x*t,y:a.y+ab.y*t}));}
+  function polyDist(A,B){
+    if(satInfo(A,B).overlapping) return 0;
+    let m=Infinity;
+    for(const p of A) for(let i=0;i<B.length;i++) m=Math.min(m,pointSeg(p,B[i],B[(i+1)%B.length]));
+    for(const p of B) for(let i=0;i<A.length;i++) m=Math.min(m,pointSeg(p,A[i],A[(i+1)%A.length]));
+    return m;
+  }
+
+  function otherParts(shape){const out=[];for(const s of shapes){if(s.id===shape.id)continue;for(const p of s.parts)out.push(p.verts);}return out;}
+  function overlapsAny(partVerts, obstacles){for(const o of obstacles){if(satInfo(partVerts,o).overlapping&&satInfo(partVerts,o).depth>1e-6)return true;}return false;}
+  function shapeOverlaps(shape, obstacles){for(const p of shape.parts)if(overlapsAny(p.verts,obstacles))return true;return false;}
+
+  function shapesTouch(s1,s2){
+    for(const p1 of s1.parts) for(const p2 of s2.parts) if(polyDist(p1.verts,p2.verts)<=TOUCH_EPS) return true;
+    return false;
+  }
+  function touchingOthers(shape){return shapes.filter(s=>s.id!==shape.id && shapesTouch(shape,s));}
+
+  // ---------- Rigid transforms ----------
+  function translateShape(sh,dx,dy){for(const p of sh.parts)for(const v of p.verts){v.x+=dx;v.y+=dy;}}
+
+  // ---------- Collision-aware move (SAT push-out, sub-stepped → slides) ----------
+  function resolve(shape, obstacles){
+    for(let iter=0;iter<8;iter++){
+      let best=null;
+      for(const p of shape.parts){
+        const pc=centroidVerts(p.verts);
+        for(const o of obstacles){
+          const info=satInfo(p.verts,o);
+          if(info.overlapping && info.depth>1e-7 && (!best||info.depth>best.depth)){
+            // orient axis from obstacle to this part
+            const d=sub(pc,centroidVerts(o));
+            const ax = dot(info.axis,d)<0 ? {x:-info.axis.x,y:-info.axis.y} : info.axis;
+            best={depth:info.depth, ax};
+          }
+        }
+      }
+      if(!best) break;
+      translateShape(shape, best.ax.x*best.depth, best.ax.y*best.depth);
+    }
+  }
+  function moveShape(shape,dx,dy){
+    const obstacles=otherParts(shape);
+    const dist=Math.hypot(dx,dy);
+    const minSide=Math.min(...shape.parts.map(partMinSide));
+    const stepMax=Math.max(4,Math.min(minSide*0.5,30));
+    const steps=Math.max(1,Math.ceil(dist/stepMax));
+    const sx=dx/steps, sy=dy/steps;
+    for(let i=0;i<steps;i++){ translateShape(shape,sx,sy); resolve(shape,obstacles); }
+  }
+
+  // ---------- Rotate until collision ----------
+  function rotateFromBase(shape, baseParts, ang, piv){
+    shape.parts.forEach((p,i)=>{ p.verts.forEach((v,j)=>{ const r=rotPt(baseParts[i].verts[j],ang,piv); v.x=r.x; v.y=r.y; }); });
+  }
+  function rotateUntilCollision(shape, baseParts, piv, targetDelta, obstacles){
+    if(targetDelta===0){ rotateFromBase(shape,baseParts,0,piv); return 0; }
+    const dir=Math.sign(targetDelta), stepN=0.6*Math.PI/180; // 0.6 degree steps
+    let good=0;
+    const total=Math.abs(targetDelta), maxSteps=Math.min(4000,Math.ceil(total/stepN));
+    for(let k=1;k<=maxSteps;k++){
+      const cand=dir*Math.min(total, k*stepN);
+      rotateFromBase(shape, baseParts, cand, piv);
+      if(shapeOverlaps(shape,obstacles)){ rotateFromBase(shape,baseParts,good,piv); return good; }
+      good=cand;
+    }
+    rotateFromBase(shape,baseParts,good,piv); return good;
+  }
+
+  // ---------- Uniform resize about anchor (flicker-free, two-sided, SAT axes) ----------
+  function scalePartsAbout(baseParts, A, s){
+    return baseParts.map(p=>({ color:p.color, verts:p.verts.map(v=>({x:A.x+s*(v.x-A.x), y:A.y+s*(v.y-A.y)})) }));
+  }
+  function halfLess(c,rhs){ if(c>1e-9)return{lo:-Infinity,hi:rhs/c}; if(c<-1e-9)return{lo:rhs/c,hi:Infinity}; return rhs>0?{lo:-Infinity,hi:Infinity}:null; }
+  function halfGreater(c,rhs){ if(c>1e-9)return{lo:rhs/c,hi:Infinity}; if(c<-1e-9)return{lo:-Infinity,hi:rhs/c}; return rhs<0?{lo:-Infinity,hi:Infinity}:null; }
+  function inter(a,b){ if(!a||!b)return null; const lo=Math.max(a.lo,b.lo),hi=Math.min(a.hi,b.hi); return lo<hi?{lo,hi}:null; }
+  // s-interval (scaling about A) where a part overlaps an obstacle, intersecting all SAT axes
+  function pairOverlapInterval(partVerts, obVerts, A){
+    const axes=axesOf(partVerts).concat(axesOf(obVerts));
+    let acc={lo:0,hi:Infinity};
+    for(const n of axes){
+      // scaled part projection on n (relative to A) = s * [pMin,pMax]
+      let pMin=Infinity,pMax=-Infinity;
+      for(const v of partVerts){ const d=dot(sub(v,A),n); if(d<pMin)pMin=d; if(d>pMax)pMax=d; }
+      let oMin=Infinity,oMax=-Infinity;
+      for(const v of obVerts){ const d=dot(sub(v,A),n); if(d<oMin)oMin=d; if(d>oMax)oMax=d; }
+      // overlap on axis: s*pMin < oMax AND s*pMax > oMin
+      const ax=inter(halfLess(pMin,oMax), halfGreater(pMax,oMin));
+      acc=inter(acc,ax);
+      if(!acc) return null;
+    }
+    return acc;
+  }
+  function contactRange(baseParts, A, obstacles){
+    let grow=Infinity, shrink=0;
+    for(const p of baseParts){
+      for(const o of obstacles){
+        const iv=pairOverlapInterval(p.verts,o,A);
+        if(!iv) continue;
+        if(iv.lo>=1-1e-6) grow=Math.min(grow,iv.lo);
+        else shrink=Math.max(shrink,Math.min(iv.hi,1));
+      }
+    }
+    return {grow,shrink};
+  }
+
+  // ---------- Part metrics / rendering ----------
+  function partMinSide(p){const e0=sub(p.verts[1],p.verts[0]),e3=sub(p.verts[3],p.verts[0]);return Math.min(len(e0),len(e3));}
+  function partAngle(p){const e0=sub(p.verts[1],p.verts[0]);return Math.atan2(e0.y,e0.x);}
+  function renderShape(shape){
+    while(shape._els.length<shape.parts.length){const d=document.createElement("div");d.className="rect";d.dataset.sid=shape.id;world.appendChild(d);shape._els.push(d);}
+    while(shape._els.length>shape.parts.length) shape._els.pop().remove();
+    const seld=shape.id===selectedId;
+    shape.parts.forEach((p,i)=>{
+      const d=shape._els[i], st=d.style, v=p.verts;
+      const e0=sub(v[1],v[0]), e3=sub(v[3],v[0]);
+      const w=len(e0), h=len(e3), ang=Math.atan2(e0.y,e0.x);
+      const c=centroidVerts(v);
+      d.dataset.sid=shape.id;
+      st.width=w+"px"; st.height=h+"px"; st.left=c.x+"px"; st.top=c.y+"px";
+      st.transform=`translate(-50%,-50%) rotate(${ang}rad)`;
+      st.background=p.color; st.zIndex=seld?5:1;
+      d.classList.toggle("sel",seld);
+    });
+  }
+  function removeEls(shape){shape._els.forEach(e=>e.remove());shape._els=[];}
+
+  // ---------- Create / merge / split / delete ----------
+  function nextColor(){return PALETTE[colorTick++%PALETTE.length];}
+  function freeSpot(cx,cy,size){
+    const all=[]; shapes.forEach(s=>s.parts.forEach(p=>all.push(p.verts)));
+    const fits=v=>!all.some(o=>{const info=satInfo(v,o);return info.overlapping&&info.depth>1e-6;});
+    let v=squareVerts(cx-size/2,cy-size/2,size);
+    if(fits(v))return v;
+    const step=size*0.5;
+    for(let ring=1;ring<40;ring++)for(let a=0;a<16;a++){const ang=(a/16)*Math.PI*2;
+      v=squareVerts(cx+Math.cos(ang)*ring*step-size/2, cy+Math.sin(ang)*ring*step-size/2, size);
+      if(fits(v))return v;}
+    return v;
+  }
+  function addSquare(wx,wy,size){
+    size=size||DEFAULT;
+    const sh={id:nextId++, angle:0, parts:[{verts:freeSpot(wx,wy,size), color:nextColor()}], _els:[]};
+    shapes.push(sh); renderShape(sh); select(sh.id); updateCount(); return sh;
+  }
+  function mergeSelected(){
+    const sel=byId(selectedId); if(!sel) return;
+    const seen=new Set([sel.id]), comp=[sel], q=[sel];
+    while(q.length){const cur=q.pop();
+      for(const s of shapes){ if(seen.has(s.id)) continue; if(shapesTouch(cur,s)){seen.add(s.id);comp.push(s);q.push(s);} }}
+    if(comp.length<2) return;
+    const parts=[]; comp.forEach(s=>{ s.parts.forEach(p=>parts.push({color:p.color, verts:p.verts.map(v=>({...v}))})); removeEls(s); });
+    shapes=shapes.filter(s=>!seen.has(s.id));
+    const merged={id:nextId++, angle:sel.angle, parts, _els:[]};
+    shapes.push(merged); renderShape(merged); select(merged.id); updateCount();
+  }
+  function splitSelected(){
+    const sel=byId(selectedId); if(!sel||sel.parts.length<2) return;
+    removeEls(sel); shapes=shapes.filter(s=>s.id!==sel.id);
+    sel.parts.forEach(p=>{ const sh={id:nextId++, angle:partAngle(p), parts:[{color:p.color, verts:p.verts.map(v=>({...v}))}], _els:[]};
+      shapes.push(sh); renderShape(sh); });
+    select(null); updateCount();
+  }
+  function removeShape(id){const sh=byId(id);if(!sh)return;removeEls(sh);shapes=shapes.filter(s=>s.id!==id);if(selectedId===id)select(null);updateCount();}
+
+  // ---------- Selection / overlay ----------
+  function select(id){const prev=selectedId;selectedId=id;const p=byId(prev);if(p)renderShape(p);const n=byId(id);if(n)renderShape(n);updateOverlay();}
+  const w2s=(wx,wy)=>({x:pan.x+wx*zoom,y:pan.y+wy*zoom});
+  const s2w=(sx,sy)=>({x:(sx-pan.x)/zoom,y:(sy-pan.y)/zoom});
+
+  function obbOf(shape){
+    const a=shape.angle, u={x:Math.cos(a),y:Math.sin(a)}, v={x:-Math.sin(a),y:Math.cos(a)};
+    let minU=Infinity,maxU=-Infinity,minV=Infinity,maxV=-Infinity;
+    shape.parts.forEach(p=>p.verts.forEach(pt=>{const pu=dot(pt,u),pv=dot(pt,v);
+      if(pu<minU)minU=pu;if(pu>maxU)maxU=pu;if(pv<minV)minV=pv;if(pv>maxV)maxV=pv;}));
+    const C=(pu,pv)=>({x:u.x*pu+v.x*pv, y:u.y*pu+v.y*pv});
+    return {u,v,minU,maxU,minV,maxV,
+      nw:C(minU,minV), ne:C(maxU,minV), se:C(maxU,maxV), sw:C(minU,maxV),
+      center:C((minU+maxU)/2,(minV+maxV)/2), topMid:C((minU+maxU)/2,minV)};
+  }
+  function updateOverlay(){
+    const sh=byId(selectedId);
+    if(!sh){ obbEl.style.display="none"; rotline.style.display="none"; rotHandle.style.display="none";
+      handles.forEach(h=>h.style.display="none"); [delBtn,mergeBtn,splitBtn].forEach(b=>b.style.display="none"); return; }
+    const o=obbOf(sh);
+    const S=p=>w2s(p.x,p.y);
+    const nw=S(o.nw),ne=S(o.ne),se=S(o.se),sw=S(o.sw),tm=S(o.topMid);
+    obbEl.style.display="block";
+    obbEl.setAttribute("points",`${nw.x},${nw.y} ${ne.x},${ne.y} ${se.x},${se.y} ${sw.x},${sw.y}`);
+    // rotate handle: offset from top-mid along the box's outward "up" (= -v) by a fixed screen distance
+    const up={x:Math.sin(sh.angle), y:-Math.cos(sh.angle)};
+    const rp={x:tm.x+up.x*ROT_HANDLE_PX, y:tm.y+up.y*ROT_HANDLE_PX};
+    rotline.style.display="block"; rotline.setAttribute("x1",tm.x);rotline.setAttribute("y1",tm.y);rotline.setAttribute("x2",rp.x);rotline.setAttribute("y2",rp.y);
+    rotHandle.style.display="flex"; rotHandle.style.left=rp.x+"px"; rotHandle.style.top=rp.y+"px";
+    const pos={nw,ne,sw,se};
+    for(const h of handles){const p=pos[h.dataset.corner];h.style.display="block";h.style.left=p.x+"px";h.style.top=p.y+"px";}
+    delBtn.style.display="flex"; delBtn.style.left=ne.x+"px"; delBtn.style.top=ne.y+"px";
+    // merge/split below the lowest corner
+    const bottom=[nw,ne,se,sw].reduce((m,p)=>p.y>m.y?p:m, nw);
+    let bx=bottom.x-30, by=bottom.y+18;
+    const canMerge=touchingOthers(sh).length>0, canSplit=sh.parts.length>1;
+    if(canMerge){mergeBtn.style.display="flex";mergeBtn.style.left=bx+"px";mergeBtn.style.top=by+"px";bx+=mergeBtn.offsetWidth+6;}else mergeBtn.style.display="none";
+    if(canSplit){splitBtn.style.display="flex";splitBtn.style.left=bx+"px";splitBtn.style.top=by+"px";}else splitBtn.style.display="none";
+  }
+
+  // ---------- View ----------
+  function updateView(){
+    world.style.transform=`translate(${pan.x}px,${pan.y}px) scale(${zoom})`;
+    viewport.style.setProperty("--gpx",(GRID*zoom)+"px");
+    viewport.style.setProperty("--gx",pan.x+"px"); viewport.style.setProperty("--gy",pan.y+"px");
+    zoomLbl.textContent=Math.round(zoom*100)+"%"; updateOverlay();
+  }
+  function zoomAt(cx,cy,f){const nz=clamp(zoom*f,MINZ,MAXZ);if(nz===zoom)return;const w=s2w(cx,cy);zoom=nz;pan.x=cx-w.x*zoom;pan.y=cy-w.y*zoom;updateView();}
+  function updateCount(){const n=shapes.length;countEl.textContent=n+(n===1?" shape":" shapes");}
+
+  // ---------- Pointer handling ----------
+  window.addEventListener("pointerdown", onDown);
+  function onDown(e){
+    if(e.button!==0) return;
+    if(e.target.closest("#bar")||e.target.closest(".ovbtn")) return;
+    const cx=e.clientX, cy=e.clientY;
+    const handle=e.target.closest(".handle");
+    const isRot=e.target.closest("#rot");
+    const rectEl=e.target.closest(".rect");
+
+    if(isRot){
+      const sh=byId(selectedId); if(!sh) return;
+      const piv=shapeCentroid(sh);
+      const pw=s2w(cx,cy);
+      mode="rotate";
+      start={shape:sh, piv, base:sh.parts.map(p=>({color:p.color,verts:p.verts.map(v=>({...v}))})),
+             baseAngle:sh.angle, startPtrAng:Math.atan2(pw.y-piv.y,pw.x-piv.x), obstacles:otherParts(sh)};
+    }
+    else if(handle){
+      const sh=byId(selectedId); if(!sh) return;
+      const o=obbOf(sh);
+      const cornerName=handle.dataset.corner;
+      const opp={nw:"se",ne:"sw",sw:"ne",se:"nw"}[cornerName];
+      const anchor=o[opp];                                  // world anchor (opposite corner)
+      const dragged=o[cornerName];
+      const offU=dot(sub(dragged,anchor),o.u), offV=dot(sub(dragged,anchor),o.v);
+      const minSide=Math.min(...sh.parts.map(partMinSide));
+      mode="resize";
+      start={shape:sh, anchor, u:o.u, v:o.v, offU, offV,
+             base:sh.parts.map(p=>({color:p.color,verts:p.verts.map(v=>({...v}))})),
+             obstacles:otherParts(sh), sMin:MIN_SIDE/minSide};
+    }
+    else if(rectEl){
+      const sh=byId(+rectEl.dataset.sid); select(sh.id);
+      const pw=s2w(cx,cy), c=shapeCentroid(sh);
+      mode="move"; start={shape:sh, grabX:pw.x-c.x, grabY:pw.y-c.y};
+    }
+    else { mode="pan"; start={px:cx,py:cy,ox:pan.x,oy:pan.y,moved:false}; }
+    try{viewport.setPointerCapture(e.pointerId);}catch(_){}
+    if(mode==="pan")viewport.classList.add("panning");
+  }
+
+  window.addEventListener("pointermove", onMove);
+  function onMove(e){
+    if(mode==="idle") return;
+    const cx=e.clientX, cy=e.clientY;
+    if(mode==="pan"){
+      pan.x=start.ox+(cx-start.px); pan.y=start.oy+(cy-start.py);
+      if(Math.abs(cx-start.px)+Math.abs(cy-start.py)>3) start.moved=true; updateView();
+    }
+    else if(mode==="move"){
+      const pw=s2w(cx,cy), c=shapeCentroid(start.shape);
+      moveShape(start.shape, (pw.x-start.grabX)-c.x, (pw.y-start.grabY)-c.y);
+      renderShape(start.shape); updateOverlay();
+    }
+    else if(mode==="rotate"){
+      const pw=s2w(cx,cy);
+      const cur=Math.atan2(pw.y-start.piv.y, pw.x-start.piv.x);
+      let delta=cur-start.startPtrAng;
+      while(delta>Math.PI)delta-=2*Math.PI; while(delta<-Math.PI)delta+=2*Math.PI;
+      const applied=rotateUntilCollision(start.shape, start.base, start.piv, delta, start.obstacles);
+      start.shape.angle=start.baseAngle+applied;
+      renderShape(start.shape); updateOverlay();
+    }
+    else if(mode==="resize"){
+      const {shape,anchor,u,v,offU,offV,base,obstacles,sMin}=start;
+      const pw=s2w(cx,cy), rel=sub(pw,anchor);
+      const fu=dot(rel,u)/offU, fv=dot(rel,v)/offV;
+      let s=clamp(Math.max(fu,fv), sMin, 60);
+      const {grow,shrink}=contactRange(base, anchor, obstacles);
+      const hiLimit=grow*(1-1e-6), loLimit=Math.max(sMin, shrink*(1+1e-6));
+      s=clamp(s, loLimit, Math.max(loLimit,hiLimit));
+      shape.parts=scalePartsAbout(base, anchor, s);
+      renderShape(shape); updateOverlay();
+    }
+  }
+
+  window.addEventListener("pointerup", onUp);
+  window.addEventListener("pointercancel", onUp);
+  function onUp(){ if(mode==="pan"&&!start.moved) select(null); viewport.classList.remove("panning"); mode="idle"; start=null; }
+
+  viewport.addEventListener("dblclick", e=>{ if(e.target.closest(".rect")||e.target.closest(".handle"))return;
+    const w=s2w(e.clientX,e.clientY); addSquare(w.x,w.y); });
+  viewport.addEventListener("wheel", e=>{ e.preventDefault(); zoomAt(e.clientX,e.clientY,e.deltaY<0?1.12:1/1.12); }, {passive:false});
+
+  // ---------- Toolbar / keys ----------
+  document.getElementById("addBtn").onclick=()=>{const w=s2w(innerWidth/2,innerHeight/2);addSquare(w.x,w.y);};
+  document.getElementById("clearBtn").onclick=()=>{shapes.forEach(removeEls);shapes=[];select(null);updateCount();};
+  document.getElementById("zoomIn").onclick=()=>zoomAt(innerWidth/2,innerHeight/2,1.2);
+  document.getElementById("zoomOut").onclick=()=>zoomAt(innerWidth/2,innerHeight/2,1/1.2);
+  document.getElementById("resetBtn").onclick=()=>{zoom=1;pan={x:0,y:0};centerOnContent();};
+  delBtn.onclick=()=>{if(selectedId!=null)removeShape(selectedId);};
+  mergeBtn.onclick=mergeSelected; splitBtn.onclick=splitSelected;
+  window.addEventListener("keydown",e=>{
+    if((e.key==="Delete"||e.key==="Backspace")&&selectedId!=null){e.preventDefault();removeShape(selectedId);}
+    else if(e.key==="Escape")select(null);
+    else if((e.key==="m"||e.key==="M")&&selectedId!=null)mergeSelected();
+  });
+
+  function centerOnContent(){
+    if(shapes.length){const all=[];shapes.forEach(s=>s.parts.forEach(p=>all.push(...p.verts)));
+      let mnx=Infinity,mny=Infinity,mxx=-Infinity,mxy=-Infinity;
+      all.forEach(v=>{mnx=Math.min(mnx,v.x);mny=Math.min(mny,v.y);mxx=Math.max(mxx,v.x);mxy=Math.max(mxy,v.y);});
+      const cx=(mnx+mxx)/2, cy=(mny+mxy)/2; pan.x=innerWidth/2-cx*zoom; pan.y=innerHeight/2-cy*zoom;
+    } else { pan.x=innerWidth/2; pan.y=innerHeight/2; }
+    updateView();
+  }
+  window.addEventListener("resize", updateOverlay);
+
+  // ---------- Seed ----------
+  pan.x=innerWidth/2; pan.y=innerHeight/2; updateView();
+  addSquare(-150,-40,120); addSquare(10,-40,120); addSquare(-70,120,150);
+  select(null); centerOnContent();
+})();
+</script>
