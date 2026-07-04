@@ -72,6 +72,9 @@
   <button class="primary" id="addBtn">+ Square</button>
   <button id="clearBtn">Clear</button>
   <div class="sep"></div>
+  <button id="undoBtn" title="Undo (Ctrl+Z)">↶ Undo</button>
+  <button id="redoBtn" title="Redo (Ctrl+Shift+Z)">↷ Redo</button>
+  <div class="sep"></div>
   <button id="zoomOut">−</button>
   <div class="zoom" id="zoomLbl">100%</div>
   <button id="zoomIn">+</button>
@@ -80,7 +83,8 @@
 
 <div id="hint">
   <b>Double-click</b> empty space to drop a square · <b>drag</b> to move · drag a <b>corner</b> to resize ·
-  drag the <b>↻</b> handle to rotate · everything stops at collisions, and <b>Merge</b>/<b>Split</b> work at any angle.
+  drag the <b>↻</b> handle to rotate · everything stops at collisions, and <b>Merge</b>/<b>Split</b> work at any angle ·
+  <b>Ctrl+Z</b> undo, <b>Ctrl+Shift+Z</b> redo.
 </div>
 <div id="count">0 shapes</div>
 
@@ -94,6 +98,7 @@
   const TOUCH_EPS = 1.3;          // gap (world units) at/under which shapes count as touching
   const ROT_HANDLE_PX = 30;       // screen offset of the rotate handle above the box
   const PALETTE = ["#5b8def","#1fc8a9","#f4a340","#e5689b","#9b6de2","#57c26b","#f0664d","#4db6d6"];
+  const HISTORY_LIMIT = 100;
 
   // ---------- State ----------
   // Shape = rigid body: { id, angle, parts:[{verts:[{x,y}x4], color}], _els:[] }
@@ -103,6 +108,7 @@
   let nextId = 1, colorTick = 0, selectedId = null;
   let mode = "idle", start = null;
   let lastMouse = {x:innerWidth/2, y:innerHeight/2};
+  let undoStack = [], redoStack = [];
 
   // ---------- DOM ----------
   const viewport=document.getElementById("viewport"), world=document.getElementById("world");
@@ -277,6 +283,36 @@
   }
   function removeEls(shape){shape._els.forEach(e=>e.remove());shape._els=[];}
 
+  // ---------- Undo / redo ----------
+  function snapshot(){
+    return {nextId, colorTick, selectedId,
+      shapes: shapes.map(s=>({id:s.id, angle:s.angle,
+        parts:s.parts.map(p=>({color:p.color, verts:p.verts.map(v=>({x:v.x,y:v.y}))}))}))};
+  }
+  function restoreSnapshot(snap){
+    shapes.forEach(removeEls);
+    shapes = snap.shapes.map(s=>({id:s.id, angle:s.angle,
+      parts:s.parts.map(p=>({color:p.color, verts:p.verts.map(v=>({...v}))})), _els:[]}));
+    nextId=snap.nextId; colorTick=snap.colorTick; selectedId=snap.selectedId;
+    shapes.forEach(renderShape); updateCount(); updateOverlay();
+  }
+  function commitHistory(preSnap){
+    undoStack.push(preSnap);
+    if(undoStack.length>HISTORY_LIMIT) undoStack.shift();
+    redoStack.length=0;
+  }
+  function pushHistory(){ commitHistory(snapshot()); }
+  function undo(){
+    if(!undoStack.length) return;
+    redoStack.push(snapshot());
+    restoreSnapshot(undoStack.pop());
+  }
+  function redo(){
+    if(!redoStack.length) return;
+    undoStack.push(snapshot());
+    restoreSnapshot(redoStack.pop());
+  }
+
   // ---------- Create / merge / split / delete ----------
   function nextColor(){return PALETTE[colorTick++%PALETTE.length];}
   function freeSpot(cx,cy,size){
@@ -291,6 +327,7 @@
     return v;
   }
   function addSquare(wx,wy,size){
+    pushHistory();
     size=size||DEFAULT;
     const sh={id:nextId++, angle:0, parts:[{verts:freeSpot(wx,wy,size), color:nextColor()}], _els:[]};
     shapes.push(sh); renderShape(sh); select(sh.id); updateCount(); return sh;
@@ -301,6 +338,7 @@
     while(q.length){const cur=q.pop();
       for(const s of shapes){ if(seen.has(s.id)) continue; if(shapesTouch(cur,s)){seen.add(s.id);comp.push(s);q.push(s);} }}
     if(comp.length<2) return;
+    pushHistory();
     const parts=[]; comp.forEach(s=>{ s.parts.forEach(p=>parts.push({color:p.color, verts:p.verts.map(v=>({...v}))})); removeEls(s); });
     shapes=shapes.filter(s=>!seen.has(s.id));
     const merged={id:nextId++, angle:sel.angle, parts, _els:[]};
@@ -308,12 +346,13 @@
   }
   function splitSelected(){
     const sel=byId(selectedId); if(!sel||sel.parts.length<2) return;
+    pushHistory();
     removeEls(sel); shapes=shapes.filter(s=>s.id!==sel.id);
     sel.parts.forEach(p=>{ const sh={id:nextId++, angle:partAngle(p), parts:[{color:p.color, verts:p.verts.map(v=>({...v}))}], _els:[]};
       shapes.push(sh); renderShape(sh); });
     select(null); updateCount();
   }
-  function removeShape(id){const sh=byId(id);if(!sh)return;removeEls(sh);shapes=shapes.filter(s=>s.id!==id);if(selectedId===id)select(null);updateCount();}
+  function removeShape(id){const sh=byId(id);if(!sh)return;pushHistory();removeEls(sh);shapes=shapes.filter(s=>s.id!==id);if(selectedId===id)select(null);updateCount();}
 
   // ---------- Selection / overlay ----------
   function select(id){const prev=selectedId;selectedId=id;const p=byId(prev);if(p)renderShape(p);const n=byId(id);if(n)renderShape(n);updateOverlay();}
@@ -385,7 +424,8 @@
       const pw=s2w(cx,cy);
       mode="rotate";
       start={shape:sh, piv, base:sh.parts.map(p=>({color:p.color,verts:p.verts.map(v=>({...v}))})),
-             baseAngle:sh.angle, startPtrAng:Math.atan2(pw.y-piv.y,pw.x-piv.x), obstacles:otherParts(sh)};
+             baseAngle:sh.angle, startPtrAng:Math.atan2(pw.y-piv.y,pw.x-piv.x), obstacles:otherParts(sh),
+             preSnap:snapshot()};
     }
     else if(handle){
       const sh=byId(selectedId); if(!sh) return;
@@ -399,12 +439,12 @@
       mode="resize";
       start={shape:sh, anchor, u:o.u, v:o.v, offU, offV,
              base:sh.parts.map(p=>({color:p.color,verts:p.verts.map(v=>({...v}))})),
-             obstacles:otherParts(sh), sMin:MIN_SIDE/minSide};
+             obstacles:otherParts(sh), sMin:MIN_SIDE/minSide, preSnap:snapshot()};
     }
     else if(rectEl){
       const sh=byId(+rectEl.dataset.sid); select(sh.id);
       const pw=s2w(cx,cy), c=shapeCentroid(sh);
-      mode="move"; start={shape:sh, grabX:pw.x-c.x, grabY:pw.y-c.y};
+      mode="move"; start={shape:sh, grabX:pw.x-c.x, grabY:pw.y-c.y, preSnap:snapshot()};
     }
     else { mode="pan"; start={px:cx,py:cy,ox:pan.x,oy:pan.y,moved:false}; }
     try{viewport.setPointerCapture(e.pointerId);}catch(_){}
@@ -449,7 +489,13 @@
 
   window.addEventListener("pointerup", onUp);
   window.addEventListener("pointercancel", onUp);
-  function onUp(){ if(mode==="pan"&&!start.moved) select(null); viewport.classList.remove("panning"); mode="idle"; start=null; }
+  function onUp(){
+    if(mode==="pan"){ if(!start.moved) select(null); }
+    else if((mode==="move"||mode==="resize"||mode==="rotate") && start.preSnap){
+      if(JSON.stringify(start.preSnap.shapes)!==JSON.stringify(snapshot().shapes)) commitHistory(start.preSnap);
+    }
+    viewport.classList.remove("panning"); mode="idle"; start=null;
+  }
 
   viewport.addEventListener("dblclick", e=>{ if(e.target.closest(".rect")||e.target.closest(".handle"))return;
     const w=s2w(e.clientX,e.clientY); addSquare(w.x,w.y); });
@@ -457,14 +503,18 @@
 
   // ---------- Toolbar / keys ----------
   document.getElementById("addBtn").onclick=()=>{const w=s2w(innerWidth/2,innerHeight/2);addSquare(w.x,w.y);};
-  document.getElementById("clearBtn").onclick=()=>{shapes.forEach(removeEls);shapes=[];select(null);updateCount();};
+  document.getElementById("clearBtn").onclick=()=>{if(!shapes.length)return;pushHistory();shapes.forEach(removeEls);shapes=[];select(null);updateCount();};
+  document.getElementById("undoBtn").onclick=undo;
+  document.getElementById("redoBtn").onclick=redo;
   document.getElementById("zoomIn").onclick=()=>zoomAt(innerWidth/2,innerHeight/2,1.2);
   document.getElementById("zoomOut").onclick=()=>zoomAt(innerWidth/2,innerHeight/2,1/1.2);
   document.getElementById("resetBtn").onclick=()=>{zoom=1;pan={x:0,y:0};centerOnContent();};
   delBtn.onclick=()=>{if(selectedId!=null)removeShape(selectedId);};
   mergeBtn.onclick=mergeSelected; splitBtn.onclick=splitSelected;
   window.addEventListener("keydown",e=>{
-    if((e.key==="Delete"||e.key==="Backspace")&&selectedId!=null){e.preventDefault();removeShape(selectedId);}
+    if((e.ctrlKey||e.metaKey)&&!e.altKey&&(e.key==="z"||e.key==="Z")){e.preventDefault();if(e.shiftKey)redo();else undo();}
+    else if((e.ctrlKey||e.metaKey)&&!e.altKey&&(e.key==="y"||e.key==="Y")){e.preventDefault();redo();}
+    else if((e.key==="Delete"||e.key==="Backspace")&&selectedId!=null){e.preventDefault();removeShape(selectedId);}
     else if(e.key==="Escape")select(null);
     else if((e.key==="m"||e.key==="M")&&selectedId!=null)mergeSelected();
     else if(e.key==="s"||e.key==="S"){const w=s2w(lastMouse.x,lastMouse.y);addSquare(w.x,w.y);}
